@@ -1,6 +1,6 @@
 # Assorted Tools
 
-This GitHub contains a collection of classes and some standalong tools. Classes are designed to be imported into other python scripts (or have their code copied in).
+This GitHub contains a collection of classes and some standalone tools. Classes are designed to be imported into other python scripts (or have their code copied in).
 
 # External Python Reqs
 
