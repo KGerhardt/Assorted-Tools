@@ -1,7 +1,7 @@
 import datetime
 from math import ceil
 
-class doneness_tracker:
+class progress_tracker:
 	def __init__(self, total, step_size = 2, message = None):
 		self.current_count = 0
 		self.max_count = total
@@ -13,6 +13,8 @@ class doneness_tracker:
 		self.justify_size = ceil(100/step)
 		self.last_percent = 0
 		self.message = message
+		
+		self.start()
 
 	def curtime(self):
 		time_format = "%d/%m/%Y %H:%M:%S"
