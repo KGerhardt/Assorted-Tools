@@ -15,6 +15,11 @@ The following external libraries are required for at least one script in this re
 
 Simple class that auto-detects zip status and properly reads both plain-text and gzipped files.
 
+Use: open a zipped or unzipped file with handle = agnostic_reader(file)
+For line in handle:
+  do_something()
+handle.close()
+
 ### progress_tracker.py
 
 Class for tracking progress in a task. Given a count of items, prints up to (a default) 50 updates at every 2% completion. of the task.
