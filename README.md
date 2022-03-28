@@ -19,7 +19,7 @@ Use: open a zipped or unzipped file and read lines:
 
 ```python
 handle = agnostic_reader(file)
-For line in handle:
+for line in handle:
   do_something
 handle.close()
 ```
