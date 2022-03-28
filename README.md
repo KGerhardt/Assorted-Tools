@@ -28,7 +28,14 @@ handle.close()
 
 Class for tracking progress in a task. Given a count of items, prints up to (a default) 50 updates at every 2% completion. of the task.
 
-Use: open the class with tracker = progress_tracker(total = ...) before a loop begins and add tracker.update() to the body of a loop.
+Use: 
+
+```python
+tracker = progress_tracker(total = ...) 
+for item in list:
+  do_something
+  tracker.update()
+```
 
 ### pyrodigal_importable.py
 
