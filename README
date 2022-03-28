@@ -7,7 +7,7 @@ This GitHub contains a collection of classes and some standalong tools. Classes 
 The following external libraries are required for at least one script in this repository:
 
 * NumPy - https://pypi.org/project/numpy/
-* https://pypi.org/project/pyrodigal/
+* Pyrodigal - https://pypi.org/project/pyrodigal/
 
 # Classes
 
