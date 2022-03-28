@@ -18,6 +18,12 @@ class agnostic_reader_iterator:
 			raise StopIteration
 
 #File reader that doesn't care if you give it a gzipped file or not.
+#Best to manually open, e.g. 
+#	input = agnostic_reader(file_path)
+#	for line in input:
+#		stuff
+#	input.close()
+
 class agnostic_reader:
 	def __init__(self, file):
 		self.path = file
