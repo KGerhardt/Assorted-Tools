@@ -15,10 +15,14 @@ The following external libraries are required for at least one script in this re
 
 Simple class that auto-detects zip status and properly reads both plain-text and gzipped files.
 
-Use: open a zipped or unzipped file with handle = agnostic_reader(file)
+Use: open a zipped or unzipped file and read lines: 
+
+```python
+handle = agnostic_reader(file)
 For line in handle:
   do_something()
 handle.close()
+```
 
 ### progress_tracker.py
 
