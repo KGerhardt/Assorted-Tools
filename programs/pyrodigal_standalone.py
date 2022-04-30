@@ -3,8 +3,6 @@ This script manages the behavior of pyrodigal for protein prediction.
 '''
 import pyrodigal as pd
 import gzip
-from math import ceil
-
 import argparse
 	
 #Iterator for agnostic reader
@@ -48,7 +46,8 @@ class agnostic_reader:
 		self.handle.close()
 	
 class pyrodigal_manager:
-	def __init__(self, file = None, aa_out = None, nt_out = None, is_meta = False, full_headers = True, keep_seqs = False, keep_after_train = False, trans_table = 11, num_bp_fmt = True, verbose = True, do_compress = False):
+	def __init__(self, file = None, aa_out = None, nt_out = None, is_meta = False, full_headers = True, trans_table = 11,
+				num_bp_fmt = True, verbose = True, do_compress = False, compare_against = None):
 		#Input NT sequences
 		self.file = file
 		
@@ -70,12 +69,6 @@ class pyrodigal_manager:
 		#If full_headers is true, protein deflines will match prodigal; else, just protein ID.
 		self.full_headers = full_headers
 		
-		#Normally, we don't need to keep an input sequence after it's had proteins predicted for it - however
-		#For FastAAI's purposes, comparisons of two translation tables is necessary.
-		#Rather than re-importing sequences and reconstructing the training sequences, keep them for faster repredict with less I/O
-		self.keep_seqs = keep_seqs
-		self.keep_after_train = keep_after_train
-		
 		#Prodigal prints info to console. I enhanced the info and made printing default, but also allow them to be totally turned off.
 		self.verbose = verbose
 		
@@ -92,6 +85,17 @@ class pyrodigal_manager:
 		#Gzip outputs if asked.
 		self.compress = do_compress
 		
+		#Normally, we don't need to keep an input sequence after it's had proteins predicted for it - however
+		#For FastAAI and MiGA's purposes, comparisons of two translation tables is necessary.
+		#Rather than re-importing sequences and reconstructing the training sequences, 
+		#keep them for faster repredict with less I/O
+		self.compare_to = compare_against
+		if self.compare_to is not None:
+			self.keep_seqs = True
+			self.keep_after_train = True
+		else:
+			self.keep_seqs = False
+			self.keep_after_train = False
 	
 	#Imports a fasta as binary.
 	def import_sequences(self):
@@ -110,28 +114,34 @@ class pyrodigal_manager:
 		
 		imp = fh.readlines()
 		
+		#imp = []
+		#for line in fh:
+		#	imp.append(line.decode().strip())
+		
 		fh.close()
 		
 		cur_seq = None
-		
 		for s in imp:
+			s = s.decode().strip()
 			#> is 62 in ascii. This is asking if the first character is '>'
-			if s[0] == 62:
+			if s.startswith(">"):
 				#Skip first cycle, then do for each after
 				if cur_seq is not None:
-					self.sequences[cur_seq] = b''.join(self.sequences[cur_seq])
-	
-				cur_seq = s[1:].decode()
+					self.sequences[cur_seq] = ''.join(self.sequences[cur_seq])
+					self.sequences[cur_seq] = self.sequences[cur_seq].encode()
+					#print(cur_seq, len(self.sequences[cur_seq]))
+				cur_seq = s[1:]
 				cur_seq = cur_seq.split()[0]
 				cur_seq = cur_seq.encode('utf-8')
 				self.sequences[cur_seq] = []
 			else:
 				#Remove the newline character.
 				#bases = s[:-1]
-				self.sequences[cur_seq].append(s[:-1])
+				self.sequences[cur_seq].append(s)
 		
 		#Final set
-		self.sequences[cur_seq] = b''.join(self.sequences[cur_seq])
+		self.sequences[cur_seq] = ''.join(self.sequences[cur_seq])
+		self.sequences[cur_seq] = self.sequences[cur_seq].encode()
 		
 		#Now we have the data, go to training.
 		if not self.is_meta:
@@ -140,11 +150,18 @@ class pyrodigal_manager:
 	#Collect up to the first 32 million bases for use in training seq.
 	def train_manager(self):
 		running_sum = 0
+		seqs_added = 0
 		if self.training_seq is None:
 			self.training_seq = []
 			for seq in self.sequences:
 				running_sum += len(self.sequences[seq])
-				
+				if seqs_added > 0:
+					#Prodigal interleaving logic - add this breaker between sequences, starting at sequence 2
+					self.training_seq.append(b'TTAATTAATTAA')
+					running_sum += 12
+					
+				seqs_added += 1
+					
 				#Handle excessive size
 				if running_sum >= 32000000:					
 					print("Warning:  Sequence is long (max 32000000 for training).")
@@ -162,9 +179,11 @@ class pyrodigal_manager:
 				
 				#add in a full sequence
 				self.training_seq.append(self.sequences[seq])
-					
+
+			if seqs_added > 1:
+				self.training_seq.append(b'TTAATTAATTAA')
+				
 			self.training_seq = b''.join(self.training_seq)
-		
 		
 		if len(self.training_seq) < 20000:
 			if self.verbose:
@@ -184,7 +203,6 @@ class pyrodigal_manager:
 		if not self.keep_after_train:
 			#Clean up
 			self.training_seq = None
-		
 		
 	def predict_genes(self):
 		if self.is_meta:
@@ -208,16 +226,68 @@ class pyrodigal_manager:
 			
 			if self.verbose:
 				print("done!")
+		
+		#Run alt comparisons in gene predict.
+		if self.compare_to is not None:
+			while len(self.compare_to) > 0:
+				try:
+					next_table = int(self.compare_to.pop(0))
+					self.compare_alternative_table(next_table)
+				except:
+					print("Alternative table comparison failed! Skipping.")
+	
+	#Predict genes with an alternative table, compare results, and keep the winner.	
+	def compare_alternative_table(self, table):
+			if table == self.trans_table:
+				print("You're trying to compare table", table, "with itself.")
+			else:
+				if self.verbose:
+					print("Comparing translation table", self.trans_table, "against table", table)
+
+				old_table = self.trans_table
+				old_genes = self.predicted_genes
+				old_size = 0
+				for seq in self.predicted_genes:
+					for gene in self.predicted_genes[seq]:
+						old_size += (gene.end - gene.begin)
+				
+				self.trans_table = table
+				self.train_manager()
+				self.predict_genes()
+				
+				new_size = 0
+				for seq in self.predicted_genes:
+					for gene in self.predicted_genes[seq]:
+						new_size += (gene.end - gene.begin)
+
+				if (old_size / new_size) > 1.1:
+					if self.verbose:
+						print("Translation table", self.trans_table, "performed better than table", old_table, "and will be used instead.")
+				else:
+					if self.verbose:
+						print("Translation table", self.trans_table, "did not perform significantly better than table", old_table, "and will not be used.")
+					self.trans_table = old_table
+					self.predicted_genes = old_genes
+				
+				#cleanup
+				old_table = None
+				old_genes = None
+				old_size = None
+				new_size = None
 			
-	#Break lines into size base pairs per line. Prodigal's default is 70.
+	#Break lines into size base pairs per line. Prodigal's default for bp is 70, aa is 60.
 	def num_bp_line_format(self, string, size = 70):
-		formatted = '\n'.join([string[(i*size):(i+1)*size] for i in range(0, ceil(len(string)/size))])
+		#ceiling funciton without the math module
+		ceiling = int(round((len(string)/size)+0.5, 0))
+		formatted = '\n'.join([string[(i*size):(i+1)*size] for i in range(0, ceiling)])
 		return formatted
 			
 	#Writeouts
 	def write_nt(self):
 		if self.nt_out is not None:
-			if self.compress:
+			if self.verbose:
+				print("Writing nucleotide sequences... ")
+			if self.compress == '1' or self.compress == '2':
 				out_writer = gzip.open(self.nt_out+".gz", "wb")
 				
 				content = b''
@@ -234,6 +304,8 @@ class pyrodigal_manager:
 							#Reduced headers if we don't care.
 							content += seqname + str(count).encode()
 							
+						content += b'\n'
+							
 						if self.num_bp_fmt:
 							#60 bp cap per line
 							content += self.num_bp_line_format(gene.sequence(), size = 70).encode()
@@ -247,7 +319,7 @@ class pyrodigal_manager:
 				out_writer.write(content)
 				out_writer.close()
 			
-			else:
+			if self.compress == '0' or self.compress == '2':
 				out_writer = open(self.nt_out, "w")
 			
 				for seq in self.predicted_genes:
@@ -276,10 +348,13 @@ class pyrodigal_manager:
 							
 				out_writer.close()
 		
+
+		
 	def write_aa(self):
 		if self.aa_out is not None:
-		
-			if self.compress:
+			if self.verbose:
+				print("Writing amino acid sequences...")
+			if self.compress == '1' or self.compress == '2':
 				out_writer = gzip.open(self.aa_out+".gz", "wb")
 				
 				content = b''
@@ -296,6 +371,8 @@ class pyrodigal_manager:
 							#Reduced headers if we don't care.
 							content += seqname + str(count).encode()
 							
+						content += b'\n'	
+						
 						if self.num_bp_fmt:
 							#60 bp cap per line
 							content += self.num_bp_line_format(gene.translate(), size = 60).encode()
@@ -309,7 +386,7 @@ class pyrodigal_manager:
 				out_writer.write(content)
 				out_writer.close()
 			
-			else:
+			if self.compress == '0' or self.compress == '2':
 				out_writer = open(self.aa_out, "w")
 				
 				for seq in self.predicted_genes:
@@ -337,6 +414,7 @@ class pyrodigal_manager:
 						count += 1
 							
 				out_writer.close()
+
 	
 def options():
 	parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, description = '''
@@ -344,7 +422,9 @@ def options():
 	
 	Currently only allows output of nucleotide and amino acid FASTA sequences, but has a few advantages:
 		30-50% faster than prodigal.
-		Takes gzipped inputs and (optionally) compresses outputs.''')
+		Takes gzipped inputs and (optionally) compresses outputs.
+		
+	If compressing outputs, ".gz" will be added to the name(s) given in --aa_out and --nt_out.''')
 	parser.add_argument('-i', '--input',  dest = 'input', default = None, help = 'Input nucleotide file in FASTA format. Required.')
 	
 	parser.add_argument('-a', '--aa_out',  dest = 'aa_out', default = None, help = 'Output proteins AA translations to this file.')
@@ -354,12 +434,14 @@ def options():
 	
 	parser.add_argument('--meta_mode', dest = 'meta', action = 'store_true', help = 'Run in metagenomic mode rather than training on your inputs. Off by default.')
 	
-	parser.add_argument('--compress',  dest = 'do_compress', action='store_true', help = 'Gzip protein outputs. Off by default.')
+	parser.add_argument('--compress',  dest = 'do_compress', default = 0, help = 'Gzip protein outputs. 0 = uncompressed, 1 = compressed, 2 = write both compressed and uncompressed.')
 	parser.add_argument('--fixed_width',  dest = 'format_out', action='store_false', help = 'Print AA or NT sequences 1/line, instead of a fixed number of 70 BP or 60 AA per line.')
 
 	parser.add_argument('--quiet',  dest = 'verbose', action='store_false', help = 'Print updates to console.')
 	parser.add_argument('--short_header', dest = 'trunc', action='store_false', help = 'Print minimal sequence identifiers instead of normal Prodigal info. Only use if you only care about the protein sequences themselves. Off by default.')
 
+	parser.add_argument('--compare_alts', dest = 'compare_against', default = None, help = "Comma-separated list of alternative translations tables to compare the table given by --trans_table against. Only the winner will be written.")
+	
 	opts = parser.parse_known_args()[0]
 	return opts, parser
 	
@@ -374,18 +456,24 @@ def main():
 		
 	if nt_out is None and aa_out is None and do_continue:
 		print("I need at least one output type.")
-		parse.print_help()
+		parser.print_help()
 		do_continue = False
 		
 	if do_continue:
 		trans_table = int(opts.table)
 		comp = opts.do_compress
+		if comp not in ['0', '1', '2']:
+			print("Compression option:", comp, "not recognized. Must be '0', '1', or '2' Defaulting to uncompressed output.")
+			comp = '0'
 		fmt_lines = opts.format_out
 		verbose = opts.verbose
 		short_head = opts.trunc
 		meta = opts.meta
+		alts = opts.compare_against
+		if alts is not None:
+			alts = alts.split(",")
 
-		manager = pyrodigal_manager(file = input, aa_out = aa_out, nt_out = nt_out, is_meta = meta, full_headers = short_head, num_bp_fmt = fmt_lines, verbose = verbose, do_compress = comp, trans_table = trans_table)
+		manager = pyrodigal_manager(file = input, aa_out = aa_out, nt_out = nt_out, is_meta = meta, full_headers = short_head, num_bp_fmt = fmt_lines, verbose = verbose, do_compress = comp, trans_table = trans_table, compare_against = alts)
 		manager.import_sequences()
 		manager.predict_genes()
 		manager.write_nt()
